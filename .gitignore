@@ -1,1 +1,3 @@
 Datasets/*
+03_TF_code/99_TensorBoard_logs/*
+03_TF_code/98_Saved_models/*
