@@ -1,11 +1,12 @@
 """
 ==================================================
 Andrés Felipe García Albarracín
-2021-06-17
+2021-06-21
 ==================================================
 
-Loads data from a csv file, tokenizes it and
-performs multi-class Classification
+Loads data from a json file, tokenizes it and
+performs multi-class Classification with a
+bidirectional LSTM
 """
 
 """
@@ -14,23 +15,17 @@ performs multi-class Classification
 ==================================================
 """
 import tensorflow as tf
-import csv
-import os, time
 import numpy as np
+import json
+import time, os
 
-vocab_size = 1000
+vocab_size = 10000
 oov_tok = '<OOV>'
 trunc_type = 'post'
-padd_type = 'post'
-max_length = 120
+pad_type = 'post'
+max_length = 32
 embedding_dim = 16
 train_portion = 0.8
-"""
-==================================================
-2. Download data
-==================================================
-"""
-# !wget --no-check-certificate https://storage.googleapis.com/laurencemoroney-blog.appspot.com/bbc-text.csv -O Datasets/bbc-text.csv
 
 stopwords = [ "a", "about", "above", "after", "again", "against", "all", "am", "an", "and", "any", "are", "as", "at", \
               "be", "because", "been", "before", "being", "below", "between", "both", "but", "by", "could", "did", "do",\
@@ -44,70 +39,78 @@ stopwords = [ "a", "about", "above", "after", "again", "against", "all", "am", "
               "up", "very", "was", "we", "we'd", "we'll", "we're", "we've", "were", "what", "what's", "when", "when's", "where", \
               "where's", "which", "while", "who", "who's", "whom", "why", "why's", "with", "would", "you", "you'd", "you'll",\
               "you're", "you've", "your", "yours", "yourself", "yourselves" ]
+"""
+==================================================
+2. Load data
+==================================================
+"""
 
-labels = []
 texts = []
-with open('../Datasets/bbc-text.csv', 'r') as file:
-    reader = csv.reader(file, delimiter = ',')
-    next(reader)
-    for line in reader:
-        labels.append(line[0])
-        sentence = line[1]
-        """
-        # Option 1
-        for fword in stopwords:
-            sentence = sentence.replace(" " + fword + " ", " ")
-            sentence = sentence.replace("  ", " ")
-        """
-        # Option 2
-        words = [word for word in sentence.split(" ") if word not in stopwords]
-        sentence = " ".join(words)
-        sentence = sentence.replace("  ", " ")
-        texts.append(sentence)
+labels = []
+
+with open('../Datasets/sarcasm.json', 'r') as file:
+    fileContents = json.load(file)
+
+long = 0
+for content in fileContents:
+    sentence = content['headline']
+    # In this case, including the stopwords degrades the performance
+    words = [word for word in sentence.split(" ")]# if word not in stopwords]
+    long = (len(words) if len(words) > long else long)
+    sentence = ' '.join(words)
+    sentence = sentence.replace('  ', ' ')
+    texts.append(sentence)
+    labels.append(int(content['is_sarcastic']))
+
+labels = np.array(labels)
+"""
+==================================================
+3. Split data
+==================================================
+"""
+splitLength = int(len(texts)*train_portion)
+train_texts = texts[:splitLength]
+eval_texts = texts[splitLength:]
+
+train_labels = labels[:splitLength]
+eval_labels = labels[splitLength:]
 
 """
 ==================================================
-3. Tokenize data
+4. Tokenize
 ==================================================
 """
 tokenizer = tf.keras.preprocessing.text.Tokenizer(
-    num_words = vocab_size,
+    num_words=vocab_size,
     oov_token=oov_tok
 )
-tokenizer.fit_on_texts(texts)
-sequences = tokenizer.texts_to_sequences(texts)
 
-label_tokenizer = tf.keras.preprocessing.text.Tokenizer()
-label_tokenizer.fit_on_texts(labels)
-# IMPORTANT: Do not forget to substract 1 to use cero indexing
-tokenized_labels = np.array(label_tokenizer.texts_to_sequences(labels))-1
+tokenizer.fit_on_texts(train_texts)
+train_sequences = tokenizer.texts_to_sequences(train_texts)
+eval_sequences = tokenizer.texts_to_sequences(eval_texts)
 
 """
 ==================================================
-4. Pad sequences
+5. Padding
 ==================================================
 """
-padded = tf.keras.preprocessing.sequence.pad_sequences(
-    sequences,
+train_padded = tf.keras.preprocessing.sequence.pad_sequences(
+    train_sequences,
+    maxlen=max_length,
     truncating=trunc_type,
-    padding=padd_type,
-    maxlen=max_length
+    padding=pad_type
 )
 
-padded = np.array(padded)
+train_padded = np.array(train_padded)
 
-"""
-==================================================
-5. Split data
-==================================================
-"""
-splitLength = int(len(padded)*train_portion)
+eval_padded = tf.keras.preprocessing.sequence.pad_sequences(
+    eval_sequences,
+    maxlen=max_length,
+    truncating=trunc_type,
+    padding=pad_type
+)
 
-train_padded = padded[:splitLength]
-eval_padded = padded[splitLength:]
-
-train_labels = tokenized_labels[:splitLength]
-eval_labels = tokenized_labels[splitLength:]
+eval_padded = np.array(eval_padded)
 
 """
 ==================================================
@@ -116,41 +119,47 @@ eval_labels = tokenized_labels[splitLength:]
 """
 class MyCallback(tf.keras.callbacks.Callback):
     def on_epoch_end(self, epoch, logs={}):
-        if logs.get('accuracy') > 0.99:
-            print("Achieve accuracy")
+        if logs['accuracy'] > 0.99:
+            print('Achieved accuracy')
             self.model.stop_training = True
 
 my_cb = MyCallback()
+
 es_cb = tf.keras.callbacks.EarlyStopping(
     patience=15,
     restore_best_weights=True,
     monitor='val_accuracy'
 )
+
 tb_cb = tf.keras.callbacks.TensorBoard(
-    log_dir=os.path.join('99_TensorBoard_logs', time.strftime('run_NLP_00_%Y%m%d-%H$M%S'))
+    log_dir=os.path.join('99_TensorBoard_logs', time.strftime('run_NLP_11_%Y%m%d-%H%M%S') )
 )
+
 """
 ==================================================
 7. Model
 ==================================================
 """
 model = tf.keras.Sequential([
-    tf.keras.layers.Embedding(vocab_size, embedding_dim, input_length=max_length),
-    tf.keras.layers.GlobalAveragePooling1D(),
+    tf.keras.layers.Embedding(vocab_size, embedding_dim, input_shape=[max_length]),
+    tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(16, return_sequences=True)),
+    tf.keras.layers.Dropout(0.4),
+    tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(8)),
+    tf.keras.layers.Dropout(0.4),
     tf.keras.layers.Dense(10, activation='relu'),
-    tf.keras.layers.Dense(len(label_tokenizer.word_index), activation=tf.nn.softmax)
+    tf.keras.layers.Dense(1, activation='sigmoid')
 ])
 
 model.compile(
-    loss = 'sparse_categorical_crossentropy',
-    optimizer='adam',
-    metrics=['accuracy']
+    loss = 'binary_crossentropy',
+    metrics = ['accuracy'],
+    optimizer='adam'
 )
 
 model.fit(
     x = train_padded,
     y = train_labels,
-    validation_data = (eval_padded, eval_labels),
+    validation_data=(eval_padded, eval_labels),
     epochs=100,
     callbacks=[my_cb, es_cb, tb_cb]
 )

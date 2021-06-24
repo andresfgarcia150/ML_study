@@ -59,7 +59,7 @@ long = 0
 for content in fileContent:
     labels.append(int(content['is_sarcastic']))
     sentence = content['headline']
-    # In this case, including the stopwords improves the performance
+    # In this case, including the stopwords degrades the performance
     words = [word for word in sentence.split(' ')]# if word not in stopwords]
     long = (len(words) if len(words) > long else long)
     sentence = ' '.join(words)
