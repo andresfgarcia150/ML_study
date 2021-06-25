@@ -17,9 +17,9 @@ import tensorflow as tf
 import numpy as np
 import time, os
 
+embedding_dim = 100
 trunc_type = 'pre'
-pad_type = 'pre' #not needed
-embedding_dim = 128
+pad_type = 'pre'
 train_portion = 0.8
 """
 ==================================================
@@ -29,10 +29,8 @@ train_portion = 0.8
 filePath = "../Datasets/irish-lyrics-eof.txt"
 lines = []
 with open(filePath, 'r') as file:
-    for line in file:
-        lines.append(line.lower().replace("\n", ""))
+    lines = file.readlines()
 
-np.random.shuffle(lines)
 """
 ==================================================
 3. Tokenize
@@ -42,52 +40,71 @@ tokenizer = tf.keras.preprocessing.text.Tokenizer()
 tokenizer.fit_on_texts(lines)
 orig_sequences = tokenizer.texts_to_sequences(lines)
 
-num_words = len(tokenizer.word_index)
+"""
+==================================================
+4. Build sequences
+==================================================
+"""
+sequences_labels = []
+for seq in orig_sequences:
+    for num in range(1, len(seq)):
+        sequences_labels.append(seq[:num+1])
 
 """
 ==================================================
-4. Build x and y
+5. Padding
 ==================================================
 """
-sequences = []
-labels = []
-for line in orig_sequences:
-    for num_word in range(1,len(line)):
-        sequences.append(line[:num_word])
-        labels.append(line[num_word])
-
-labels = np.array(labels)-1
-labels = tf.keras.utils.to_categorical(labels, num_words)
-"""
-==================================================
-4. Padding
-==================================================
-"""
-padded = tf.keras.preprocessing.sequence.pad_sequences(
-    sequences,
-    truncating=trunc_type
+padded_labels = tf.keras.preprocessing.sequence.pad_sequences(
+    sequences_labels,
+    padding='pre'
 )
 
+padded_labels = np.array(padded_labels)
+
+# Shuffling
+np.random.shuffle(padded_labels)
+
 """
 ==================================================
-5. Splitting
+6. Splitting
 ==================================================
 """
+padded = padded_labels[:,:-1]
+labels = padded_labels[:,-1] - 1
+
 splitLength = int(len(padded)*train_portion)
 train_padded = padded[:splitLength]
 eval_padded = padded[splitLength:]
+
 train_labels = labels[:splitLength]
 eval_labels = labels[splitLength:]
 
 """
 ==================================================
-6. Callbacks
+7. Load weights
+==================================================
+"""
+weightFile = f"../Datasets/glove.6B/glove.6B.{embedding_dim}d.txt"
+word_index = tokenizer.word_index
+num_words = len(word_index)
+
+weights_matrix = np.zeros((num_words+1, embedding_dim))
+with open(weightFile, 'r') as file:
+    for wLine in file:
+        elements = wLine.split(' ')
+        if word_index.get(elements[0]) is not None:
+            weights_matrix[word_index.get(elements[0])] = np.array(elements[1:]).astype(float)
+
+"""
+==================================================
+9. Callbacks
 ==================================================
 """
 class MyCallback(tf.keras.callbacks.Callback):
     def on_epoch_end(self, epoch, logs={}):
-        if(logs.get('accuracy') > 0.9):
-            print('Accuracy achieved')
+        if logs.get('accuracy') > 0.9:
+            print('Achieved accuracy')
             self.model.stop_training = True
 
 my_cb = MyCallback()
@@ -98,62 +115,48 @@ es_cb = tf.keras.callbacks.EarlyStopping(
 )
 
 tb_cb = tf.keras.callbacks.TensorBoard(
-    log_dir=os.path.join('99_TensorBoard_logs', time.strftime("run_NLP_50_%Y%m%d-%H%M%S"))
+    log_dir=os.path.join('99_TensorBoard_logs', time.strftime('run_NLP_51_%Y%m%d-%H%M%S'))
 )
 
 """
 ==================================================
-7. Model
+10. Model
 ==================================================
 """
 model = tf.keras.Sequential([
-    tf.keras.layers.Embedding(num_words+1, embedding_dim, input_shape=[None]),
-    tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(128, return_sequences=True)),
-    tf.keras.layers.Dropout(0.4),
-    tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(128)),
-    tf.keras.layers.Dropout(0.4),
-    tf.keras.layers.Dense(512, activation='relu'),
-    tf.keras.layers.Dropout(0.4),
-    tf.keras.layers.Dense(num_words, activation='softmax')
-])
-
-# A simpler model
-model = tf.keras.Sequential([
-    tf.keras.layers.Embedding(num_words+1, embedding_dim, input_shape=[None]),
+    tf.keras.layers.Embedding(num_words+1, embedding_dim, weights=[weights_matrix], input_shape=[None]),
     tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(256)),
     tf.keras.layers.Dense(num_words, activation=tf.nn.softmax)
 ])
 
 model.compile(
-    loss = 'categorical_crossentropy',
-    metrics=['accuracy'],
-    optimizer='adam'
+    loss='sparse_categorical_crossentropy',
+    optimizer='adam',
+    metrics=['accuracy']
 )
 
 model.fit(
-    x=train_padded,
+    x = train_padded,
     y = train_labels,
-    validation_data=(eval_padded, eval_labels),
+    validation_data= (eval_padded, eval_labels),
     epochs=100,
-    callbacks=[my_cb, es_cb, tb_cb],
-    batch_size=128
+    callbacks=[my_cb, es_cb, tb_cb]
 )
 
 """
 ==================================================
-8. Create text
+11. Text prediction
 ==================================================
 """
-inv_index = {}
-for word, value in tokenizer.word_index.items():
-    inv_index[value-1] = word
+index_word = {}
+for word, index in word_index.items():
+    index_word[index-1] = word
 
 seed_text = "I've got a bad feeling about this"
 next_words = 100
 
-for rep in range(next_words):
-    seq = tokenizer.texts_to_sequences([seed_text])[0]
-    #pred = model.predict_classes([seq])
-    pred = np.argmax(model.predict([seq]), axis=-1)
-    new_word = inv_index[int(pred)]
-    seed_text = seed_text + " " + new_word
+for iter in range(next_words):
+    new_seq = tokenizer.texts_to_sequences([seed_text])[0]
+    new_index = np.argmax(model.predict([new_seq]))
+    new_word = index_word[new_index]
+    seed_text += " " + new_word
