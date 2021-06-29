@@ -4,7 +4,7 @@ Andrés Felipe García Albarracín
 2021-06-28
 ==================================================
 
-Reads csv data and tests several forecast models
+Reads csv data and tests an LSTM forecast model
 using adam as optimizer
 """
 import matplotlib.pyplot as plt
